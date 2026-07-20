@@ -30,18 +30,18 @@ TL;DR: HOMIE is a subject-consistent video customization model enhanced by multi
 <table align="center">
   <tr>
     <td align="center">
-      <video src="assets/demo_1.mp4" width="90%" controls autoplay muted loop playsinline></video>
+      <video src="https://github.com/user-attachments/assets/3ab12e14-04b1-4e67-9868-e36802a1de7e" width="90%" controls autoplay muted loop playsinline></video>
     </td>
     <td align="center">
-      <video src="assets/demo_2.mp4" width="90%" controls autoplay muted loop playsinline></video>
+      <video src="https://github.com/user-attachments/assets/69c50bcc-da5f-4493-9e04-9718f040cbea" width="90%" controls autoplay muted loop playsinline></video>
     </td>
   </tr>
   <tr>
     <td align="center">
-      <video src="assets/demo_3.mp4" width="90%" controls autoplay muted loop playsinline></video>
+      <video src="https://github.com/user-attachments/assets/887e7b39-4472-4c72-ae23-2008caa32f39" width="90%" controls autoplay muted loop playsinline></video>
     </td>
     <td align="center">
-      <video src="assets/demo_4.mp4" width="90%" controls autoplay muted loop playsinline></video>
+      <video src="https://github.com/user-attachments/assets/391dad00-6dc6-4a37-8d53-87d10c8e0797" width="90%" controls autoplay muted loop playsinline></video>
     </td>
   </tr>
 </table>
