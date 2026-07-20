@@ -7,7 +7,7 @@
 
 <h1>HOMIE: Human-object Centric Video Personalization via Multimodal Intelligent Enhancement</h1>
 
-[Yiyang Cai*](https://yiyangcai.github.io/) · [Nan Chen*](https://cn-makers.github.io/) · Rongchang Xie · Junwen Pan · Chunyang Jiang · Cheng Chen · Wen Zhou <sup>&#9993;</sup> · Zhenbang Sun · Wei Xue · [Wenhan Luo](https://whluo.github.io/)<sup>&#9993;</sup> · Yike Guo
+[Yiyang Cai*](https://yiyangcai.github.io/) · [Nan Chen*](https://cn-makers.github.io/) · Rongchang Xie · Junwen Pan · Chunyang Jiang · Cheng Chen · Wen Zhou · Zhenbang Sun · Wei Xue · [Wenhan Luo](https://whluo.github.io/) · Yike Guo
 
 Hong Kong University of Science and Technology
 
