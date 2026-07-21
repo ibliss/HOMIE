@@ -14,7 +14,7 @@ Hong Kong University of Science and Technology
 mailto: ycaicj@connect.ust.hk
 
 <a href='https://yiyangcai.github.io/homie-page.github.io/'><img src='https://img.shields.io/badge/Project-Page-green'></a>
-<a href='https://arxiv.org/'><img src='https://img.shields.io/badge/Technique-Report-red'></a>
+<a href='https://arxiv.org/pdf/2607.18217'><img src='https://img.shields.io/badge/Technique-Report-red'></a>
 <a href='https://huggingface.co/yychai/homie-r2v-wan2.1'><img src='https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model-blue'></a>
 
 </div>
@@ -156,10 +156,13 @@ This project is based on the work of [Wan2.1](https://github.com/Wan-Video/Wan2.
 ## 📚 Citation
 If you use this project in your research, please cite the following paper:
 ```
-@article{yiyang2026homie,
-  title={HOMIE},
-  author={Yiyang, Cai},
-  journal={arXiv preprint arXiv:TBD},
-  year={2026}
+@misc{cai2026homiehumanobjectcentricvideo,
+      title={HOMIE: Human-object Centric Video Personalization via Multimodal Intelligent Enchancement}, 
+      author={Yiyang Cai and Nan Chen and Rongchang Xie and Junwen Pan and Chunyang Jiang and Cheng Chen and Wen Zhou and Zhenbang Sun and Wei Xue and Wenhan Luo and Yike Guo},
+      year={2026},
+      eprint={2607.18217},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2607.18217}, 
 }
 `````
