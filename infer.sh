@@ -1,7 +1,7 @@
 set -e
 
-CKPT_DIR=${CKPT_DIR:-/mnt/bn/bes-mllm-shared/caiyiyang/hf_models/Wan2.1-T2V-14B-Diffusers}
-HOMIE_CKPT=${HOMIE_CKPT:-/mnt/bn/bes-mllm-shared/caiyiyang/code/open_homie/Homie-Wan-Models}
+CKPT_DIR=${CKPT_DIR:-/path/to/hf_models/Wan2.1-T2V-14B-Diffusers}
+HOMIE_CKPT=${HOMIE_CKPT:-/path/to/hf_models/Homie-Wan-Models}
 INPUT_JSON=${INPUT_JSON:-./eval_examples/meta_file_with_mllm.jsonl}
 SAVE_PATH=${SAVE_PATH:-./video_results_480p}
 
