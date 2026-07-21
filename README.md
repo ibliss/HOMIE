@@ -51,7 +51,7 @@ HOMIE supports diverse combination of human-object references, both intra- and i
 
 ## 🔥 Latest News
 
-🚀 [2026-07-xx] We release the technical report, inference codes as well as checkpoints tuned on Wan2.1-T2V-14B.
+🚀 [2026-07-21] We release the technical report, inference codes as well as checkpoints tuned on Wan2.1-T2V-14B.
 
 ## Quick Start
 
