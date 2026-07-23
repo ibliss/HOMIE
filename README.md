@@ -20,8 +20,6 @@ python generate.py \
     --save_path ./video_results_q8/ --base_seed 6666
 ```
 
-Defaults match the Docker `generate` path: `--quantized_dit`, `--t5_cpu`, `832*480`, `frame_num=33`. `--quantized_dit` is single-GPU only (no FSDP / multi-process). Raise `--frame_num` only after 33 succeeds with VRAM headroom. See `docker/` for the container workflow and `quant/` to build q8 yourself from bf16.
-
 ---
 
 <div align="center">
