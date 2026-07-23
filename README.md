@@ -1,3 +1,28 @@
+## This fork
+
+Fork of [HOMIE](https://github.com/yiyangcai/HOMIE) with **Quanto qint8 DiT** inference so the 14B model fits on lower-VRAM GPUs (e.g. RTX 3090 / 24 GB). Use the pre-quantized weights from [IanB/homie-r2v-wan2.1_q8](https://huggingface.co/IanB/homie-r2v-wan2.1_q8).
+
+Download the q8 model
+```sh
+# q8 DiT: Homie_Wan_14B_q8.safetensors + quantization_map.json
+huggingface-cli download IanB/homie-r2v-wan2.1_q8 --local-dir ./weights/HOMIE-Wan-Model-q8
+```
+
+Follow the Quick Start guide, but generate with the q8 model
+```sh
+python generate.py \
+    --task s2v-14B --size 832*480 --frame_num 33 --sample_fps 24 \
+    --ckpt_dir ./weights/Wan2.1-T2V-14B-Diffusers \
+    --homie_ckpt ./weights/HOMIE-Wan-Model-q8 \
+    --homie_ckpt_basename Homie_Wan_14B_q8 \
+    --quantized_dit --t5_cpu \
+    --input_json ./eval_examples/meta_file_with_mllm.jsonl \
+    --save_path ./video_results_q8/ --base_seed 6666
+```
+
+Defaults match the Docker `generate` path: `--quantized_dit`, `--t5_cpu`, `832*480`, `frame_num=33`. `--quantized_dit` is single-GPU only (no FSDP / multi-process). Raise `--frame_num` only after 33 succeeds with VRAM headroom. See `docker/` for the container workflow and `quant/` to build q8 yourself from bf16.
+
+---
 
 <div align="center">
 

@@ -8,6 +8,7 @@ import argparse
 import logging
 import os
 import random
+import resource
 import sys
 import warnings
 from datetime import datetime
@@ -22,6 +23,48 @@ from homie_wan.configs import HOMIE_CONFIGS, SIZE_CONFIGS, SUPPORTED_SIZES, get_
 from homie_wan.utils.utils import cache_video, load_homie_jsonl, load_image, str2bool
 
 
+def _rss_gib() -> float:
+    # Linux: ru_maxrss is KiB.
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2)
+
+
+def _log_memory(tag: str, device: int = 0):
+    msg = f"[mem {tag}] peak RSS={_rss_gib():.2f} GiB"
+    if torch.cuda.is_available() and device < torch.cuda.device_count():
+        msg += (
+            f" CUDA[{device}]={torch.cuda.get_device_name(device)}"
+            f" allocated={torch.cuda.max_memory_allocated(device) / (1024**3):.2f} GiB"
+            f" reserved={torch.cuda.max_memory_reserved(device) / (1024**3):.2f} GiB"
+        )
+    logging.info(msg)
+
+
+def _select_cuda_device(local_rank: int) -> int:
+    """Bind a usable CUDA device; fail clearly if none are compatible."""
+    if not torch.cuda.is_available() or torch.cuda.device_count() == 0:
+        raise RuntimeError("No CUDA device is available inside the container.")
+    if local_rank < 0 or local_rank >= torch.cuda.device_count():
+        raise RuntimeError(
+            f"Requested CUDA device {local_rank} but only "
+            f"{torch.cuda.device_count()} device(s) are visible. "
+            "Check CUDA_VISIBLE_DEVICES / nvidia-smi ordering."
+        )
+    torch.cuda.set_device(local_rank)
+    # Touch the device so incompatible arches fail before model load.
+    torch.zeros(1, device=f"cuda:{local_rank}")
+    props = torch.cuda.get_device_properties(local_rank)
+    logging.info(
+        "Using CUDA device %d: %s (sm_%d%d, %.1f GiB)",
+        local_rank,
+        torch.cuda.get_device_name(local_rank),
+        props.major,
+        props.minor,
+        props.total_memory / (1024**3),
+    )
+    torch.cuda.reset_peak_memory_stats(local_rank)
+    return local_rank
+
+
 def _validate_args(args):
     assert args.ckpt_dir is not None, "Please specify --ckpt_dir (HF Wan2.1-T2V-14B-Diffusers)."
     assert args.homie_ckpt is not None, "Please specify --homie_ckpt (HOMIE-Wan-Model dir)."
@@ -33,6 +76,9 @@ def _validate_args(args):
         args.sample_shift = 3.0
     if args.frame_num is None:
         args.frame_num = 97
+
+    if args.quantized_dit and args.homie_ckpt_basename == "Homie_Wan_14B":
+        args.homie_ckpt_basename = "Homie_Wan_14B_q8"
 
     args.base_seed = args.base_seed if args.base_seed >= 0 else random.randint(0, sys.maxsize)
     assert args.size in SUPPORTED_SIZES[args.task], (
@@ -55,6 +101,12 @@ def _parse_args():
     parser.add_argument("--homie_ckpt", type=str, default=None,
                         help="Dir with Homie_Wan_14B*.safetensors + index json.")
     parser.add_argument("--homie_ckpt_basename", type=str, default="Homie_Wan_14B")
+    parser.add_argument(
+        "--quantized_dit",
+        action="store_true",
+        default=False,
+        help="Load a Quanto qint8 DiT from --homie_ckpt (expects Homie_Wan_14B_q8 + quantization_map.json).",
+    )
     parser.add_argument("--offload_model", type=str2bool, default=None,
                         help="Offload the DiT to CPU after denoising to save VRAM.")
 
@@ -129,19 +181,22 @@ def generate(args):
     rank = int(os.getenv("RANK", 0))
     world_size = int(os.getenv("WORLD_SIZE", 1))
     local_rank = int(os.getenv("LOCAL_RANK", 0))
-    device = local_rank
     _init_logging(rank)
 
     if args.offload_model is None:
         args.offload_model = False if world_size > 1 else True
 
     if world_size > 1:
-        torch.cuda.set_device(local_rank)
+        device = _select_cuda_device(local_rank)
         dist.init_process_group(backend="nccl", init_method="env://",
                                 rank=rank, world_size=world_size)
     else:
         assert not (args.t5_fsdp or args.dit_fsdp), \
             "t5_fsdp/dit_fsdp require a distributed (torchrun) launch."
+        device = _select_cuda_device(local_rank)
+
+    if args.quantized_dit and (args.dit_fsdp or args.t5_fsdp or world_size > 1):
+        raise ValueError("--quantized_dit is single-GPU only (no FSDP / multi-process).")
 
     assert args.ulysses_size == 1 and args.ring_size == 1, (
         "Context parallel (--ulysses_size/--ring_size > 1) is not implemented yet for "
@@ -154,6 +209,7 @@ def generate(args):
         cfg.sample_fps = args.sample_fps
 
     logging.info(f"Generation job args: {args}")
+    _log_memory("start", device)
 
     if dist.is_initialized():
         base_seed = [args.base_seed] if rank == 0 else [None]
@@ -194,7 +250,9 @@ def generate(args):
         dit_fsdp=args.dit_fsdp,
         use_usp=False,
         t5_cpu=args.t5_cpu,
+        quantized_dit=args.quantized_dit,
     )
+    _log_memory("pipeline_loaded", device)
 
     os.makedirs(args.save_path, exist_ok=True)
 
@@ -228,6 +286,7 @@ def generate(args):
             cache_video(video[None], save_file=save_file, fps=cfg.sample_fps,
                         nrow=1, normalize=True, value_range=(-1, 1))
             logging.info(f"[sample {i}] saved to {save_file}")
+            _log_memory(f"sample_{i}_done", device)
 
     if dist.is_initialized():
         dist.barrier()
@@ -239,6 +298,7 @@ def generate(args):
             f"sample {num_real - 1} (added to reach a multiple of world_size={world_size}) "
             f"and can be deleted: {dup_files}"
         )
+    _log_memory("finished", device)
     logging.info("Finished.")
 
 

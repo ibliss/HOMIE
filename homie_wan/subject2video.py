@@ -60,16 +60,19 @@ class HomieWanS2V:
         dit_fsdp=False,
         use_usp=False,
         t5_cpu=False,
+        quantized_dit=False,
     ):
         """
         config:      EasyDict from configs (s2v_14B).
         ckpt_dir:    HF Wan2.1-T2V-14B-Diffusers dir (vae/text_encoder/tokenizer subfolders).
-        homie_ckpt:  dir containing Homie_Wan_14B*.safetensors + index json.
+        homie_ckpt:  dir containing Homie_Wan_14B*.safetensors + index json,
+                     or Homie_Wan_14B_q8.safetensors + quantization_map.json when quantized.
         """
         self.device = torch.device(f"cuda:{device_id}")
         self.config = config
         self.rank = rank
         self.t5_cpu = t5_cpu
+        self.quantized_dit = bool(quantized_dit)
 
         self.num_train_timesteps = config.num_train_timesteps
         self.param_dtype = config.param_dtype
@@ -82,54 +85,102 @@ class HomieWanS2V:
                 "Context parallel (--ulysses_size > 1) is not supported yet; "
                 "see homie_wan/distributed/context_parallel.py."
             )
+        if self.quantized_dit and dit_fsdp:
+            raise ValueError("quantized_dit is single-GPU only; do not combine with --dit_fsdp.")
+        if self.quantized_dit and t5_fsdp:
+            raise ValueError("quantized_dit is single-GPU only; do not combine with --t5_fsdp.")
 
         shard_fn = partial(shard_model, device_id=device_id)
 
-        # ----- text encoder + tokenizer (UMT5) -----
-        self.text_encoder = HomieT5(
-            ckpt_dir=ckpt_dir,
-            text_encoder_subfolder=config.text_encoder_subfolder,
-            tokenizer_subfolder=config.tokenizer_subfolder,
-            text_len=config.text_len,
-            dtype=config.t5_dtype,
-            device=torch.device("cpu") if t5_cpu else self.device,
-            shard_fn=shard_fn if t5_fsdp else None,
-        )
+        # Load DiT before CPU T5 when quantized so host RAM is not holding both
+        # the q8 state_dict and UMT5 at the same time.
+        if self.quantized_dit:
+            self.model = self._load_dit(
+                homie_ckpt, homie_ckpt_basename, dit_fsdp=False, shard_fn=None
+            )
+            self.vae = HomieWanVAE(
+                ckpt_dir=ckpt_dir,
+                vae_subfolder=config.vae_subfolder,
+                norm_mode=config.vae_norm_mode,
+                dtype=config.vae_dtype,
+                device=self.device,
+            )
+            self.text_encoder = HomieT5(
+                ckpt_dir=ckpt_dir,
+                text_encoder_subfolder=config.text_encoder_subfolder,
+                tokenizer_subfolder=config.tokenizer_subfolder,
+                text_len=config.text_len,
+                dtype=config.t5_dtype,
+                device=torch.device("cpu") if t5_cpu else self.device,
+                shard_fn=None,
+            )
+        else:
+            self.text_encoder = HomieT5(
+                ckpt_dir=ckpt_dir,
+                text_encoder_subfolder=config.text_encoder_subfolder,
+                tokenizer_subfolder=config.tokenizer_subfolder,
+                text_len=config.text_len,
+                dtype=config.t5_dtype,
+                device=torch.device("cpu") if t5_cpu else self.device,
+                shard_fn=shard_fn if t5_fsdp else None,
+            )
+            self.vae = HomieWanVAE(
+                ckpt_dir=ckpt_dir,
+                vae_subfolder=config.vae_subfolder,
+                norm_mode=config.vae_norm_mode,
+                dtype=config.vae_dtype,
+                device=self.device,
+            )
+            self.model = self._load_dit(
+                homie_ckpt, homie_ckpt_basename, dit_fsdp=dit_fsdp, shard_fn=shard_fn
+            )
 
-        # ----- VAE (AutoencoderKLWan) -----
-        self.vae = HomieWanVAE(
-            ckpt_dir=ckpt_dir,
-            vae_subfolder=config.vae_subfolder,
-            norm_mode=config.vae_norm_mode,
-            dtype=config.vae_dtype,
-            device=self.device,
-        )
         self.z_dim = self.vae.z_dim
         # AutoencoderKLWan strides: temporal 4, spatial 8 (Wan2.1 VAE).
         self.vae_stride = (4, 8, 8)
 
-        # ----- DiT -----
-        logging.info(f"Creating HomieWanModel from {homie_ckpt}")
-        self.model = HomieWanModel(
-            model_type=config.model_type,
-            patch_size=config.patch_size,
-            text_len=config.text_len,
-            in_dim=config.in_dim,
-            dim=config.dim,
-            ffn_dim=config.ffn_dim,
-            freq_dim=config.freq_dim,
-            text_dim=config.text_dim,
-            img_dim=config.img_dim,
-            out_dim=config.out_dim,
-            num_heads=config.num_heads,
-            num_layers=config.num_layers,
-            qk_norm=config.qk_norm,
-            qk_norm_type=config.qk_norm_type,
-            cross_attn_norm=config.cross_attn_norm,
-            eps=config.eps,
-            max_seq_len=config.max_seq_len,
-            reference_num=config.reference_num,
-            qwen_hidden_size=config.qwen_hidden_size,
+    def _load_dit(self, homie_ckpt, homie_ckpt_basename, dit_fsdp, shard_fn):
+        logging.info(
+            "Creating HomieWanModel from %s (quantized_dit=%s)",
+            homie_ckpt,
+            self.quantized_dit,
+        )
+        if self.quantized_dit:
+            from quant.quanto_io import DEFAULT_Q8_BASENAME, load_quantized_dit
+
+            basename = homie_ckpt_basename
+            if basename == "Homie_Wan_14B":
+                basename = DEFAULT_Q8_BASENAME
+            # Load packed weights on CPU, then device-only move to CUDA.
+            model = load_quantized_dit(
+                homie_ckpt,
+                basename=basename,
+                device="cpu",
+                task="s2v-14B",
+            )
+            model.to(self.device)
+            return model
+
+        model = HomieWanModel(
+            model_type=self.config.model_type,
+            patch_size=self.config.patch_size,
+            text_len=self.config.text_len,
+            in_dim=self.config.in_dim,
+            dim=self.config.dim,
+            ffn_dim=self.config.ffn_dim,
+            freq_dim=self.config.freq_dim,
+            text_dim=self.config.text_dim,
+            img_dim=self.config.img_dim,
+            out_dim=self.config.out_dim,
+            num_heads=self.config.num_heads,
+            num_layers=self.config.num_layers,
+            qk_norm=self.config.qk_norm,
+            qk_norm_type=self.config.qk_norm_type,
+            cross_attn_norm=self.config.cross_attn_norm,
+            eps=self.config.eps,
+            max_seq_len=self.config.max_seq_len,
+            reference_num=self.config.reference_num,
+            qwen_hidden_size=self.config.qwen_hidden_size,
         )
         state = load_sharded_safetensors(homie_ckpt, homie_ckpt_basename, device="cpu")
         # Reshape any 0-dim params (e.g. qwen_3dvae_connector.scale) to 1D so they
@@ -137,18 +188,42 @@ class HomieWanS2V:
         for k, v in list(state.items()):
             if v.dim() == 0:
                 state[k] = v.reshape(1)
-        # strict=True: the model was built with MindSpeed-matching key names.
-        missing, unexpected = self.model.load_state_dict(state, strict=False)
+        missing, unexpected = model.load_state_dict(state, strict=False)
         if missing or unexpected:
             logging.warning(f"load_state_dict missing={missing} unexpected={unexpected}")
-        self.model = self.model.to(self.param_dtype).eval().requires_grad_(False)
+        model = model.to(self.param_dtype).eval().requires_grad_(False)
 
         if dist.is_initialized():
             dist.barrier()
         if dit_fsdp:
-            self.model = shard_fn(self.model)
+            model = shard_fn(model)
         else:
-            self.model.to(self.device)
+            model.to(self.device)
+        return model
+
+    def _ensure_dit_device(self, device):
+        """Move DiT to ``device`` if it is not already there (multi-sample offload)."""
+        try:
+            current = next(self.model.parameters()).device
+        except StopIteration:
+            return
+        if current != device:
+            logging.info("Moving DiT %s -> %s", current, device)
+            self.model.to(device)
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+    def _ensure_vae_device(self, device):
+        """Move VAE to ``device`` (free GPU VRAM during DiT denoise when on CPU)."""
+        try:
+            current = next(self.vae.model.parameters()).device
+        except StopIteration:
+            return
+        if current != device:
+            logging.info("Moving VAE %s -> %s", current, device)
+            self.vae.model.to(device)
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     # ---------------------------------------------------------------------------------
     # Reference-latent preparation (port of prepare_r2v_image_latents)
@@ -229,12 +304,26 @@ class HomieWanS2V:
         seed_g = torch.Generator(device=self.device)
         seed_g.manual_seed(seed if seed >= 0 else 0)
 
+        # Multi-sample offload leaves the DiT on CPU after decode; bring it back.
+        self._ensure_dit_device(self.device)
+
         # ----- reference latents -----
+        self._ensure_vae_device(self.device)
         ref_latents = self.get_ref_latents(ref_images, size).to(self.device)  # [z,ref,lh,lw]
         ref_latents = ref_latents.unsqueeze(0).to(self.param_dtype)  # [1,z,ref,lh,lw]
         # NOTE: HOMIE (like the NPU WanPipeline) uses single *text* CFG only — the same
         # reference latents are used for the conditional and unconditional passes. There
         # is no separate zeroed-reference (image-CFG) branch as in Phantom's S2V.
+
+        # Free VAE VRAM for the DiT denoise (reloaded before decode below).
+        self._ensure_vae_device(torch.device("cpu"))
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+            logging.info(
+                "Post-ref CUDA allocated=%.2f GiB reserved=%.2f GiB",
+                torch.cuda.memory_allocated(self.device) / (1024**3),
+                torch.cuda.memory_reserved(self.device) / (1024**3),
+            )
 
         # ----- qwen feature -----
         if qwen_feature is not None:
@@ -275,6 +364,10 @@ class HomieWanS2V:
 
         no_sync = getattr(self.model, "no_sync", noop_no_sync)
 
+        if self.device.type == "cuda":
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(self.device)
+
         with torch.amp.autocast("cuda", dtype=self.param_dtype), no_sync():
             for t in tqdm(timesteps, desc="denoising", disable=self.rank != 0):
                 latent_model_input = latents.to(self.param_dtype)
@@ -296,6 +389,13 @@ class HomieWanS2V:
                     noise_pred, t, latents, return_dict=False
                 )[0]
 
+        if self.device.type == "cuda" and self.rank == 0:
+            logging.info(
+                "Denoise peak CUDA allocated=%.2f GiB reserved=%.2f GiB",
+                torch.cuda.max_memory_allocated(self.device) / (1024**3),
+                torch.cuda.max_memory_reserved(self.device) / (1024**3),
+            )
+
         if offload_model:
             self.model.cpu()
             torch.cuda.empty_cache()
@@ -304,6 +404,7 @@ class HomieWanS2V:
         # Each rank decodes the sample it owns (samples are distributed data-parallel,
         # round-robin across ranks in generate.py), so every rank must produce & save
         # its own video — not just rank 0.
+        self._ensure_vae_device(self.device)
         video = self.vae.decode(latents.to(self.vae.dtype))  # [1,3,F,H,W] in [-1,1]
         video = video[0]  # [3, F, H, W]
 
